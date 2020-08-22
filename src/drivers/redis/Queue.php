@@ -33,6 +33,27 @@ class Queue extends CliQueue
      */
     public $commandClass = Command::class;
 
+    /** @var string */
+    private $reservedKey;
+
+    /** @var string */
+    private $attemptsKey;
+
+    /** @var string */
+    private $messagesKey;
+
+    /** @var string */
+    private $messageIdKey;
+
+    /** @var string */
+    private $waitingKey;
+
+    /** @var string */
+    private $delayedKey;
+
+    /** @var string */
+    private $wildcardKey;
+
     /**
      * @inheritdoc
      */
@@ -40,6 +61,13 @@ class Queue extends CliQueue
     {
         parent::init();
         $this->redis = Instance::ensure($this->redis, Connection::class);
+        $this->attemptsKey = "$this->channel.attempts";
+        $this->messagesKey = "$this->channel.messages";
+        $this->wildcardKey = "$this->channel.*";
+        $this->delayedKey = "$this->channel.delayed";
+        $this->waitingKey = "$this->channel.waiting";
+        $this->reservedKey = "$this->channel.reserved";
+        $this->messageIdKey = "$this->channel.message_id";
     }
 
     /**
@@ -79,8 +107,8 @@ class Queue extends CliQueue
         return (int) $this->redis->eval(
             Scripts::STATUS,
             2,
-            "$this->channel.attempts",
-            "$this->channel.messages",
+            $this->attemptsKey,
+            $this->messagesKey,
             $id
         );
     }
@@ -92,7 +120,7 @@ class Queue extends CliQueue
      */
     public function clear()
     {
-        $this->redis->eval(Scripts::CLEAR, 0, "$this->channel.*");
+        $this->redis->eval(Scripts::CLEAR, 0, $this->wildcardKey);
     }
 
     /**
@@ -107,11 +135,11 @@ class Queue extends CliQueue
         return (bool) $this->redis->eval(
             Scripts::REMOVE,
             5,
-            "$this->channel.messages",
-            "$this->channel.delayed",
-            "$this->channel.reserved",
-            "$this->channel.waiting",
-            "$this->channel.attempts",
+            $this->messagesKey,
+            $this->delayedKey,
+            $this->reservedKey,
+            $this->waitingKey,
+            $this->attemptsKey,
             $id
       );
     }
@@ -123,17 +151,17 @@ class Queue extends CliQueue
     protected function reserve($timeout)
     {
         // Moves delayed and reserved jobs into waiting list
-        $this->moveExpired("$this->channel.delayed");
-        $this->moveExpired("$this->channel.reserved");
+        $this->moveExpired($this->delayedKey);
+        $this->moveExpired($this->reservedKey);
 
         // Find a new waiting message
         $result = $this->redis->eval(
             Scripts::RESERVE,
             4,
-            "$this->channel.waiting",
-            "$this->channel.messages",
-            "$this->channel.reserved",
-            "$this->channel.attempts",
+            $this->waitingKey,
+            $this->messagesKey,
+            $this->reservedKey,
+            $this->attemptsKey,
             time()
         );
 
@@ -156,7 +184,7 @@ class Queue extends CliQueue
             Scripts::MOVE_EXPIRED,
             2,
             $from,
-            "$this->channel.waiting",
+            $this->waitingKey,
             time()
         );
     }
@@ -171,9 +199,9 @@ class Queue extends CliQueue
         $this->redis->eval(
             Scripts::DELETE,
             3,
-            "$this->channel.reserved",
-            "$this->channel.attempts",
-            "$this->channel.messages",
+            $this->reservedKey,
+            $this->attemptsKey,
+            $this->messagesKey,
             $id
         );
     }
@@ -190,10 +218,10 @@ class Queue extends CliQueue
         return $this->redis->eval(
             Scripts::PUSH,
             4,
-            "$this->channel.message_id",
-            "$this->channel.messages",
-            "$this->channel.waiting",
-            "$this->channel.delayed",
+            $this->messageIdKey,
+            $this->messagesKey,
+            $this->waitingKey,
+            $this->delayedKey,
             "{$ttr};{$message}",
             $delay,
             time()
