@@ -109,7 +109,10 @@ class Queue extends CliQueue
             2,
             $this->attemptsKey,
             $this->messagesKey,
-            $id
+            $id,
+            self::STATUS_WAITING,
+            self::STATUS_RESERVED,
+            self::STATUS_DONE
         );
     }
 
