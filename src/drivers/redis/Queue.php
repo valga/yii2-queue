@@ -33,7 +33,6 @@ class Queue extends CliQueue
      */
     public $commandClass = Command::class;
 
-
     /**
      * @inheritdoc
      */
@@ -77,15 +76,13 @@ class Queue extends CliQueue
             throw new InvalidArgumentException("Unknown message ID: $id.");
         }
 
-        if ($this->redis->hexists("$this->channel.attempts", $id)) {
-            return self::STATUS_RESERVED;
-        }
-
-        if ($this->redis->hexists("$this->channel.messages", $id)) {
-            return self::STATUS_WAITING;
-        }
-
-        return self::STATUS_DONE;
+        return (int) $this->redis->eval(
+            Scripts::STATUS,
+            2,
+            "$this->channel.attempts",
+            "$this->channel.messages",
+            $id
+        );
     }
 
     /**
@@ -95,10 +92,7 @@ class Queue extends CliQueue
      */
     public function clear()
     {
-        while (!$this->redis->set("$this->channel.moving_lock", true, 'NX')) {
-            usleep(10000);
-        }
-        $this->redis->executeCommand('DEL', $this->redis->keys("$this->channel.*"));
+        $this->redis->eval(Scripts::CLEAR, 0, "$this->channel.*");
     }
 
     /**
@@ -110,19 +104,16 @@ class Queue extends CliQueue
      */
     public function remove($id)
     {
-        while (!$this->redis->set("$this->channel.moving_lock", true, 'NX', 'EX', 1)) {
-            usleep(10000);
-        }
-        if ($this->redis->hdel("$this->channel.messages", $id)) {
-            $this->redis->zrem("$this->channel.delayed", $id);
-            $this->redis->zrem("$this->channel.reserved", $id);
-            $this->redis->lrem("$this->channel.waiting", 0, $id);
-            $this->redis->hdel("$this->channel.attempts", $id);
-
-            return true;
-        }
-
-        return false;
+        return (bool) $this->redis->eval(
+            Scripts::REMOVE,
+            5,
+            "$this->channel.messages",
+            "$this->channel.delayed",
+            "$this->channel.reserved",
+            "$this->channel.waiting",
+            "$this->channel.attempts",
+            $id
+      );
     }
 
     /**
@@ -131,29 +122,29 @@ class Queue extends CliQueue
      */
     protected function reserve($timeout)
     {
-        // Moves delayed and reserved jobs into waiting list with lock for one second
-        if ($this->redis->set("$this->channel.moving_lock", true, 'NX', 'EX', 1)) {
-            $this->moveExpired("$this->channel.delayed");
-            $this->moveExpired("$this->channel.reserved");
-        }
+        // Moves delayed and reserved jobs into waiting list
+        $this->moveExpired("$this->channel.delayed");
+        $this->moveExpired("$this->channel.reserved");
 
         // Find a new waiting message
-        $id = null;
-        if (!$timeout) {
-            $id = $this->redis->rpop("$this->channel.waiting");
-        } elseif ($result = $this->redis->brpop("$this->channel.waiting", $timeout)) {
-            $id = $result[1];
-        }
-        if (!$id) {
+        $result = $this->redis->eval(
+            Scripts::RESERVE,
+            4,
+            "$this->channel.waiting",
+            "$this->channel.messages",
+            "$this->channel.reserved",
+            "$this->channel.attempts",
+            time()
+        );
+
+        if (empty($result)) {
+            if ($timeout) {
+                usleep(10000);
+            }
             return null;
         }
 
-        $payload = $this->redis->hget("$this->channel.messages", $id);
-        list($ttr, $message) = explode(';', $payload, 2);
-        $this->redis->zadd("$this->channel.reserved", time() + $ttr, $id);
-        $attempt = $this->redis->hincrby("$this->channel.attempts", $id, 1);
-
-        return [$id, $message, $ttr, $attempt];
+        return $result;
     }
 
     /**
@@ -161,13 +152,13 @@ class Queue extends CliQueue
      */
     protected function moveExpired($from)
     {
-        $now = time();
-        if ($expired = $this->redis->zrangebyscore($from, '-inf', $now)) {
-            $this->redis->zremrangebyscore($from, '-inf', $now);
-            foreach ($expired as $id) {
-                $this->redis->lpush("$this->channel.waiting", $id);
-            }
-        }
+        $this->redis->eval(
+            Scripts::MOVE_EXPIRED,
+            2,
+            $from,
+            "$this->channel.waiting",
+            time()
+        );
     }
 
     /**
@@ -177,9 +168,14 @@ class Queue extends CliQueue
      */
     protected function delete($id)
     {
-        $this->redis->zrem("$this->channel.reserved", $id);
-        $this->redis->hdel("$this->channel.attempts", $id);
-        $this->redis->hdel("$this->channel.messages", $id);
+        $this->redis->eval(
+            Scripts::DELETE,
+            3,
+            "$this->channel.reserved",
+            "$this->channel.attempts",
+            "$this->channel.messages",
+            $id
+        );
     }
 
     /**
@@ -191,14 +187,16 @@ class Queue extends CliQueue
             throw new NotSupportedException('Job priority is not supported in the driver.');
         }
 
-        $id = $this->redis->incr("$this->channel.message_id");
-        $this->redis->hset("$this->channel.messages", $id, "$ttr;$message");
-        if (!$delay) {
-            $this->redis->lpush("$this->channel.waiting", $id);
-        } else {
-            $this->redis->zadd("$this->channel.delayed", time() + $delay, $id);
-        }
-
-        return $id;
+        return $this->redis->eval(
+            Scripts::PUSH,
+            4,
+            "$this->channel.message_id",
+            "$this->channel.messages",
+            "$this->channel.waiting",
+            "$this->channel.delayed",
+            "{$ttr};{$message}",
+            $delay,
+            time()
+        );
     }
 }
