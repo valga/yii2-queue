@@ -112,6 +112,52 @@ redis.call("HSET", identityIndexKey, id, identity)
 return id
 LUA;
 
+    const DELETE_AND_PUSH = <<<LUA
+local reservedKey, attemptsKey, messagesKey, identityIndexKey, identityLockKey, messageIdKey, waitingKey, delayedKey = unpack(KEYS)
+local oldId, newIdentity, payload, delay, now = unpack(ARGV)
+
+local oldIdentity = redis.call("HGET", identityIndexKey, oldId)
+if oldIdentity then
+     redis.call("HDEL", identityIndexKey, oldId)
+     redis.call("HDEL", identityLockKey, oldIdentity)
+end
+
+redis.call("ZREM", reservedKey, oldId)
+redis.call("HDEL", attemptsKey, oldId)
+redis.call("HDEL", messagesKey, oldId)
+
+local previousId = redis.call("HGET", identityLockKey, newIdentity)
+if previousId then
+    if redis.call("ZSCORE", delayedKey, previousId) then
+        return nil
+    end
+
+    if redis.call("ZSCORE", reservedKey, previousId) then
+        return nil
+    end
+
+    if redis.call("HEXISTS", messagesKey, previousId) then
+        return nil
+    end
+end
+
+local newId = redis.call("INCR", messageIdKey)
+
+redis.call("HSET", messagesKey, newId, payload)
+
+if tonumber(delay) == 0 then
+    redis.call("LPUSH", waitingKey, newId)
+else
+    redis.call("ZADD", delayedKey, now + delay, newId)
+end
+
+redis.call("HSET", identityLockKey, newIdentity, newId)
+redis.call("HSET", identityIndexKey, newId, newIdentity)
+
+return newId
+LUA;
+
+
     const RESERVE = <<<LUA
 local waitingKey, messagesKey, reservedKey, attemptsKey = unpack(KEYS)
 local now = unpack(ARGV)

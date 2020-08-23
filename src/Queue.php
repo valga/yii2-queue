@@ -229,7 +229,7 @@ abstract class Queue extends Component
      * @param string $message
      * @param int $ttr time to reserve
      * @param int $attempt number
-     * @return bool
+     * @return bool|JobMessage
      */
     protected function handleMessage($id, $message, $ttr, $attempt)
     {
@@ -258,6 +258,11 @@ abstract class Queue extends Component
             return $this->handleError($event);
         }
         $this->trigger(self::EVENT_AFTER_EXEC, $event);
+        if ($event->job instanceof StatefulJobInterface) {
+            $jobMessage = $event->job->getNextStateJob($this);
+
+            return $jobMessage !== null ? $jobMessage : true;
+        }
         return true;
     }
 

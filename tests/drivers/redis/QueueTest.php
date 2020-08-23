@@ -9,6 +9,7 @@ namespace tests\drivers\redis;
 
 use tests\app\IdentityJob;
 use tests\app\RetryJob;
+use tests\app\StatefulJob;
 use tests\drivers\CliTestCase;
 use Yii;
 use yii\queue\redis\Queue;
@@ -105,6 +106,34 @@ class QueueTest extends CliTestCase
         $this->runProcess('php yii queue/run');
 
         $this->assertFalse((bool) $this->getQueue()->redis->hexists($this->getQueue()->channel . '.job_id_lock', $identity));
+        $this->assertFalse((bool) $this->getQueue()->redis->hexists($this->getQueue()->channel . '.job_id_index', $id));
+    }
+
+    public function testStatefulJob()
+    {
+        $this->startProcess('php yii queue/listen 3');
+        $job = new StatefulJob(3);
+        $id = $this->getQueue()->push($job);
+        sleep(6);
+
+        $this->assertFileExists($job->getFileName());
+        $this->assertEquals('321', file_get_contents($job->getFileName()));
+
+        $this->assertFalse((bool) $this->getQueue()->redis->hexists($this->getQueue()->channel . '.job_id_lock', $job->getJobIdentity()));
+        $this->assertFalse((bool) $this->getQueue()->redis->hexists($this->getQueue()->channel . '.job_id_index', $id));
+    }
+
+    public function testFailingStatefulJob()
+    {
+        $this->startProcess('php yii queue/listen 3');
+        $job = new StatefulJob(3, 1);
+        $id = $this->getQueue()->push($job);
+        sleep(6);
+
+        $this->assertFileExists($job->getFileName());
+        $this->assertEquals('32', file_get_contents($job->getFileName()));
+
+        $this->assertFalse((bool) $this->getQueue()->redis->hexists($this->getQueue()->channel . '.job_id_lock', $job->getJobIdentity()));
         $this->assertFalse((bool) $this->getQueue()->redis->hexists($this->getQueue()->channel . '.job_id_index', $id));
     }
 

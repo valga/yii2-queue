@@ -11,6 +11,7 @@ use yii\base\InvalidArgumentException;
 use yii\base\NotSupportedException;
 use yii\di\Instance;
 use yii\queue\cli\Queue as CliQueue;
+use yii\queue\JobMessage;
 use yii\redis\Connection;
 
 /**
@@ -93,7 +94,10 @@ class Queue extends CliQueue
             while ($canContinue()) {
                 if (($payload = $this->reserve($timeout)) !== null) {
                     list($id, $message, $ttr, $attempt) = $payload;
-                    if ($this->handleMessage($id, $message, $ttr, $attempt)) {
+                    $result = $this->handleMessage($id, $message, $ttr, $attempt);
+                    if ($result instanceof JobMessage) {
+                        $this->deleteAndPush($id, $result);
+                    } elseif ($result) {
                         $this->delete($id);
                     }
                 } elseif (!$repeat) {
@@ -218,6 +222,31 @@ class Queue extends CliQueue
             $this->identityIndexKey,
             $this->identityLockKey,
             $id
+        );
+    }
+
+    /**
+     * @param string $id
+     * @return string
+     */
+    protected function deleteAndPush($id, JobMessage $job)
+    {
+        return $this->redis->eval(
+            Scripts::DELETE_AND_PUSH,
+            8,
+            $this->reservedKey,
+            $this->attemptsKey,
+            $this->messagesKey,
+            $this->identityIndexKey,
+            $this->identityLockKey,
+            $this->messageIdKey,
+            $this->waitingKey,
+            $this->delayedKey,
+            $id,
+            $job->identity,
+            "{$job->ttr};{$job->message}",
+            $job->delay,
+            time()
         );
     }
 

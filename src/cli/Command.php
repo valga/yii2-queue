@@ -11,7 +11,9 @@ use Symfony\Component\Process\Exception\ProcessFailedException;
 use Symfony\Component\Process\Exception\RuntimeException as ProcessRuntimeException;
 use Symfony\Component\Process\Process;
 use yii\console\Controller;
+use yii\helpers\Json;
 use yii\queue\ExecEvent;
+use yii\queue\JobMessage;
 
 /**
  * Base Command.
@@ -143,7 +145,11 @@ abstract class Command extends Controller
      */
     public function actionExec($id, $ttr, $attempt, $pid)
     {
-        if ($this->queue->execute($id, file_get_contents('php://stdin'), $ttr, $attempt, $pid ?: null)) {
+        $result = $this->queue->execute($id, file_get_contents('php://stdin'), $ttr, $attempt, $pid ?: null);
+        if ($result instanceof JobMessage) {
+            echo Json::encode($result);
+        }
+        if ($result) {
             return self::EXEC_DONE;
         }
         return self::EXEC_RETRY;
@@ -156,7 +162,7 @@ abstract class Command extends Controller
      * @param string $message
      * @param int $ttr time to reserve
      * @param int $attempt number
-     * @return bool
+     * @return bool|JobMessage
      * @throws
      * @see actionExec()
      */
@@ -182,19 +188,30 @@ abstract class Command extends Controller
             $cmd[] = '--color=' . $this->isColorEnabled();
         }
 
+        $output = '';
         $process = new Process($cmd, null, null, $message, $ttr);
         try {
-            $result = $process->run(function ($type, $buffer) {
+            $result = $process->run(function ($type, $buffer) use (&$output) {
                 if ($type === Process::ERR) {
                     $this->stderr($buffer);
                 } else {
+                    $output .= $buffer;
                     $this->stdout($buffer);
                 }
             });
             if (!in_array($result, [self::EXEC_DONE, self::EXEC_RETRY])) {
                 throw new ProcessFailedException($process);
             }
-            return $result === self::EXEC_DONE;
+            if ($output === '') {
+                return $result === self::EXEC_DONE;
+            }
+            try {
+                return new JobMessage(Json::decode($output));
+            } catch (\Exception $e) {
+                return $result === self::EXEC_DONE;
+            } catch (\Throwable $e) {
+                return $result === self::EXEC_DONE;
+            }
         } catch (ProcessRuntimeException $error) {
             list($job) = $this->queue->unserializeMessage($message);
             return $this->queue->handleError(new ExecEvent([

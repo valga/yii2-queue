@@ -12,6 +12,7 @@ use yii\base\BootstrapInterface;
 use yii\base\InvalidConfigException;
 use yii\console\Application as ConsoleApp;
 use yii\helpers\Inflector;
+use yii\queue\JobMessage;
 use yii\queue\Queue as BaseQueue;
 
 /**
@@ -153,7 +154,7 @@ abstract class Queue extends BaseQueue implements BootstrapInterface
      * @param int $ttr time to reserve
      * @param int $attempt number
      * @param int|null $workerPid of worker process
-     * @return bool
+     * @return bool|JobMessage
      * @internal for worker command only
      */
     public function execute($id, $message, $ttr, $attempt, $workerPid)
