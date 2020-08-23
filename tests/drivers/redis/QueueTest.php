@@ -7,6 +7,7 @@
 
 namespace tests\drivers\redis;
 
+use tests\app\IdentityJob;
 use tests\app\RetryJob;
 use tests\drivers\CliTestCase;
 use Yii;
@@ -85,6 +86,26 @@ class QueueTest extends CliTestCase
         $this->runProcess("php yii queue/remove $id");
 
         $this->assertFalse((bool) $this->getQueue()->redis->hexists($this->getQueue()->channel . '.messages', $id));
+    }
+
+    public function testPreventDuplicate()
+    {
+        $job = new IdentityJob('test');
+        $identity = $job->getJobIdentity();
+        $id = $this->getQueue()->push($job);
+
+        $this->assertNotNull($id);
+        $this->assertEquals($id, $this->getQueue()->redis->hget($this->getQueue()->channel . '.job_id_lock', $identity));
+        $this->assertEquals($identity, $this->getQueue()->redis->hget($this->getQueue()->channel . '.job_id_index', $id));
+
+        $clone = clone($job);
+        $cloneId = $this->getQueue()->push($clone);
+        $this->assertNull($cloneId);
+
+        $this->runProcess('php yii queue/run');
+
+        $this->assertFalse((bool) $this->getQueue()->redis->hexists($this->getQueue()->channel . '.job_id_lock', $identity));
+        $this->assertFalse((bool) $this->getQueue()->redis->hexists($this->getQueue()->channel . '.job_id_index', $id));
     }
 
     /**

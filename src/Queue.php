@@ -193,7 +193,13 @@ abstract class Queue extends Component
         }
 
         $message = $this->serializer->serialize($event->job);
-        $event->id = $this->pushMessage($message, $event->ttr, $event->delay, $event->priority);
+        $identity = $event->job instanceof JobIdentityInterface
+            ? $event->job->getJobIdentity()
+            : get_class($event->job) . ':' . sha1($message);
+        $event->id = $this->pushMessage($message, $event->ttr, $event->delay, $identity);
+        if (empty($event->id)) {
+            return null;
+        }
         $this->trigger(self::EVENT_AFTER_PUSH, $event);
 
         return $event->id;

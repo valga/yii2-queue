@@ -31,8 +31,14 @@ return keys
 LUA;
 
     const REMOVE = <<<LUA
-local messagesKey, delayedKey, reservedKey, waitingKey, attemptsKey = unpack(KEYS)
+local messagesKey, delayedKey, reservedKey, waitingKey, attemptsKey, identityIndexKey, identityLockKey = unpack(KEYS)
 local id = unpack(ARGV)
+
+local identity = redis.call("HGET", identityIndexKey, id)
+if identity then
+     redis.call("HDEL", identityIndexKey, id)
+     redis.call("HDEL", identityLockKey, identity)
+end
 
 local result = redis.call("HDEL", messagesKey, id)
 
@@ -57,8 +63,14 @@ redis.call("ZREMRANGEBYSCORE", fromSet, "-inf", threshold)
 LUA;
 
     const DELETE = <<<LUA
-local reservedKey, attemptsKey, messagesKey = unpack(KEYS)
+local reservedKey, attemptsKey, messagesKey, identityIndexKey, identityLockKey = unpack(KEYS)
 local id = unpack(ARGV)
+
+local identity = redis.call("HGET", identityIndexKey, id)
+if identity then
+     redis.call("HDEL", identityIndexKey, id)
+     redis.call("HDEL", identityLockKey, identity)
+end
 
 redis.call("ZREM", reservedKey, id)
 redis.call("HDEL", attemptsKey, id)
@@ -66,8 +78,23 @@ redis.call("HDEL", messagesKey, id)
 LUA;
 
     const PUSH = <<<LUA
-local messageIdKey, messagesKey, waitingKey, delayedKey = unpack(KEYS)
-local payload, delay, now = unpack(ARGV)
+local messageIdKey, messagesKey, waitingKey, delayedKey, identityLockKey, identityIndexKey, reservedKey = unpack(KEYS)
+local payload, delay, now, identity = unpack(ARGV)
+
+local previousId = redis.call("HGET", identityLockKey, identity)
+if previousId then
+    if redis.call("ZSCORE", delayedKey, previousId) then
+        return nil
+    end
+
+    if redis.call("ZSCORE", reservedKey, previousId) then
+        return nil
+    end
+
+    if redis.call("HEXISTS", messagesKey, previousId) then
+        return nil
+    end
+end
 
 local id = redis.call("INCR", messageIdKey)
 
@@ -78,6 +105,9 @@ if tonumber(delay) == 0 then
 else
     redis.call("ZADD", delayedKey, now + delay, id)
 end
+
+redis.call("HSET", identityLockKey, identity, id)
+redis.call("HSET", identityIndexKey, id, identity)
 
 return id
 LUA;

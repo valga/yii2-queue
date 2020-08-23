@@ -54,6 +54,12 @@ class Queue extends CliQueue
     /** @var string */
     private $wildcardKey;
 
+    /** @var string */
+    private $identityLockKey;
+
+    /** @var string */
+    private $identityIndexKey;
+
     /**
      * @inheritdoc
      */
@@ -68,6 +74,8 @@ class Queue extends CliQueue
         $this->waitingKey = "$this->channel.waiting";
         $this->reservedKey = "$this->channel.reserved";
         $this->messageIdKey = "$this->channel.message_id";
+        $this->identityLockKey = "$this->channel.job_id_lock";
+        $this->identityIndexKey = "$this->channel.job_id_index";
     }
 
     /**
@@ -137,12 +145,14 @@ class Queue extends CliQueue
     {
         return (bool) $this->redis->eval(
             Scripts::REMOVE,
-            5,
+            7,
             $this->messagesKey,
             $this->delayedKey,
             $this->reservedKey,
             $this->waitingKey,
             $this->attemptsKey,
+            $this->identityIndexKey,
+            $this->identityLockKey,
             $id
       );
     }
@@ -201,10 +211,12 @@ class Queue extends CliQueue
     {
         $this->redis->eval(
             Scripts::DELETE,
-            3,
+            5,
             $this->reservedKey,
             $this->attemptsKey,
             $this->messagesKey,
+            $this->identityIndexKey,
+            $this->identityLockKey,
             $id
         );
     }
@@ -212,22 +224,22 @@ class Queue extends CliQueue
     /**
      * @inheritdoc
      */
-    protected function pushMessage($message, $ttr, $delay, $priority)
+    protected function pushMessage($message, $ttr, $delay, $identity)
     {
-        if ($priority !== null) {
-            throw new NotSupportedException('Job priority is not supported in the driver.');
-        }
-
         return $this->redis->eval(
             Scripts::PUSH,
-            4,
+            7,
             $this->messageIdKey,
             $this->messagesKey,
             $this->waitingKey,
             $this->delayedKey,
+            $this->identityLockKey,
+            $this->identityIndexKey,
+            $this->reservedKey,
             "{$ttr};{$message}",
             $delay,
-            time()
+            time(),
+            $identity
         );
     }
 }
